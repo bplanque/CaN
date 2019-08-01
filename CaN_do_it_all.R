@@ -9,6 +9,7 @@ graphics.off()                              # clear all graphical windows
 cat("\014")                                 # clear console
 rm(list=ls())                               # clear the work environment
 
+require(expm)                                 # Loading the expm library -- require to compute matrix powers
 # library(abind)                              # Loading the abind package -- Bindind arrays
 # library(arrayhelpers)                       # Loading the arrayhelpers package -- Functions for array modification and shaping
 # library(devtools)                           # Loading the devtools package -- Tools for package development
@@ -29,6 +30,7 @@ rm(list=ls())                               # clear the work environment
 # library(tidyverse)                          # Loading the tidyverse package -- Set of packages for data manipulations
 
 # loading input data ------------------------------------------------------
+
 # Biomass data - this must include estimates + min and max values (constraints)
 # Catches/landings - this must include estimates + min and max values (constraints)
 
@@ -70,6 +72,7 @@ Alpha=c(100,100,100,0.25,100,100,0.5,0.5)
 
 Diets <- read.delim(file = 'Trophic.flows.csv',header = TRUE, sep = ';')
 # Construction of the diet matrix
+# Note: species interaction matrices are always constructed with prey in rows and predators in columns
 x1=data.frame(sp.num=1:ns,sp.name=Species.names)
 x2=merge(Diets,x1,by.x = "Prey", by.y = "sp.name",all.x = TRUE)
 x3=merge(x2,x1,by.x="Predator",by.y="sp.name",all.x=TRUE)
@@ -77,30 +80,41 @@ DietMatrix=matrix(nrow = ns,ncol = ns,data = 0)
 DietMatrix[x3[,3]+(x3[,4]-1)*ns]=1
 DietVector=as.vector(DietMatrix)
 
-# deriving G, H and K
+
+# deriving G, H and K -----------------------------------------------------
+# so that the Mater equation can be written in the form:
+# B(i,t+1) ??? B(i,t) = Sumj(G(j,i)F(j,i,t)???Sumj(K(i)F(i,j,t)) ??? H(i)B(i,t)
 H=1-exp(-Mu)
 K=H/Mu
-G=(Kappa%*%t(H*Gamma/Mu))*DietMatrix
+G=(Kappa%*%t(K*Gamma))*DietMatrix
+
 
 # construction of the polytope --------------------------------------------
 # from the above, build matrix A and vector b so that A.f=<b, with f, the  
 # vector of all trophic flows at all time steps
 
-# Construction of matrix L
-Lijk=matrix(data=0,nrow = ns,ncol = ns^2) # je suis perdu!
-for (i in 1:ns){ # loop on species (i)
-  deltaij=deltaik=matrix(data = 0,nrow = ns,ncol = ns)
-  deltaij[,i]=1
-  deltaik[]
-  Ljk={}
+# Construction of matrix J
+Jijk=matrix(data=0,nrow = ns,ncol = ns^2)       # interaction betwee species i and flux j->k
+for (i in 1:ns){                                # loop on species (i)
+  deltaij=matrix(data=0,nrow = ns,ncol = ns)    # initialise matrix delta(i,j)
+  deltaij[i,]=1                                 # delta(i,j)=1 if the prey (row) is equal to i
+  deltaik=t(deltaij)                            # delta(i,k)=1 if the predator (col) is equal to i
+  Ji=G*deltaik-K[i]*deltaij                     # compute the sub-matrix J(j,k) for species i
+  Jijk[i,]=as.vector(Ji)                        # linearlise it and store it into the matrix J(i,jk)
 }
 
 IE=diag(ns) # identity matrix of size E (number of species)
-L0=matrix(data = NA,nrow = ny,ncol = ny)
-for (i in 1:(ny-1)){
-  L0[(row(L0)-i)==col(L0)]<-i-1
+L0=matrix(data = 0,nrow = ny,ncol = ny)        # initialise the L0 matrix (exponents required to compute L)
+for (i in 1:(ny-1)){                            # loop on years
+  L0[(row(L0)-i)==col(L0)]<-i-1                 # assign exponent
 }
-
+L=matrix(data=0,nrow = dim(Jijk)[1]*ny,ncol = dim(Jijk)[2]*ny) 
+for (j in 1:(ny-1)){                              # loop on columns (years)
+  for (i in (j+1):ny){                          # loop on rows (years)
+    Lij=((IE-H)%^%L0[i,j])%*%Jijk                 # construct the submatrix L(i,j)
+    L[((i-1)*ns+1):(i*ns),((i-1)*(ns^2)+1):(i*(ns^2))]=Lij
+  }
+}
 
 # Construction of matrix M
 
