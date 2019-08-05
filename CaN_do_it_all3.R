@@ -2,6 +2,7 @@
 # An R attempt to build a foodweb assessment model based on CaN principles
 #
 # Benjamin Planque / Christian Mullon - August 2019
+# License CC-BY-NC 4.0
 
 
 # initialisation ----------------------------------------------------------
@@ -33,16 +34,12 @@ Bio.mean <- Biomasses[,seq(2,dim(Biomasses)[2],3)]
 Bio.min <- Biomasses[,seq(3,dim(Biomasses)[2],3)]
 Bio.max <- Biomasses[,seq(4,dim(Biomasses)[2],3)]
 
-# handling of primary production as a declining pool of ressource through time
-# (the idea is that the total production is given in the first year and will
-# decline throughout the years, following the min and max provided)
-delta.min <- Bio.min[,1]-Bio.mean[,1]
-delta.max <- Bio.max[,1]-Bio.mean[,1]
-Bio.mean[,1] <- flipud(as.matrix(cumsum(flipud(as.matrix(Bio.mean[,1])))))
-Bio.min[,1] <- Bio.mean[,1]+delta.min
-Bio.max[,1] <- Bio.mean[,1]+delta.max
+# handling of primary production as Import
+Bio.min[,1] <- Bio.min[,1]*0
 B0 <- Biomasses[1,seq(2,dim(Biomasses)[2],3)]
-B0[1] <- Bio.mean[1,1]+Biomasses[1,2] # the PP at t=0 is set to cumsum(PP) at t=1 + the PP at t=1
+Import <- matrix(nrow = ny, ncol = ns0, data = 0)
+colnames(Import) <- Species.names
+Import[,1] <- Bio.mean$PP
 
 Landings=read.delim(file = 'Landings.csv',header = TRUE, sep=';')
 if(dim(Biomasses)[1]!=dim(Landings)[1]){
@@ -66,6 +63,7 @@ Bio.max$Fishery.max <- cumsum(rowSums(Land.max))+sum(Land.max[1,])
 B0$Fishery <- 0
 Land.min$Fishery.min <- 0
 Land.max$Fishery.max <- 0
+Import=cbind(Import,rep(0,ny)); colnames(Import)[ns]='Fishery'
 
 # loading input parameters ------------------------------------------------
 # This must include parameters on assimilation efficiency (gamma), 
@@ -119,17 +117,16 @@ F.max[rep(c(rep(0,(ns*(ns-1))),rep(1,ns)),ny)==1] <- as.vector(t(as.matrix(Land.
 
 # deriving G, H and K -----------------------------------------------------
 # so that the Mater equation can be written in the form:
-# B(i,t+1) - B(i,t) = Sumj(G(j,i)F(j,i,t) - Sumj(K(i)F(i,j,t)) - H(i)B(i,t)
-H0 <- 1-exp(-Mu)
-K <- H0/Mu
+# B(i,t+1) - B(i,t) = Sumj(G(j,i)F(j,i,t) - Sumj(K(i)F(i,j,t)) + K(i)Import(i,t) - H(i)B(i,t)
+H <- 1-exp(-Mu)
+K <- H/Mu
 K[Mu==0]=1 # special case when Mu=0 (fishery)
 G <- (Kappa%*%t(K*Gamma))
 G[,ns] <- 1 # special case for the fishery (no digestibility issue)
 G <- G*DietMatrix
 
-# Construction of matrix J (note (e) from equation 6) ---------------------
+# Construction of matrix N (note (e) from equation 6) ---------------------
 IE <- diag(ns)                                     # identity matrix of size E (number of species)
-H <- IE*H0                                         # matrix with diagonal terms Hi 
 Nijk <- matrix(data=0,nrow = ns,ncol = ns^2)       # interaction betwee species i and flux j->k
 for (i in 1:ns){                                   # loop on species (i)
   deltaij <- matrix(data=0,nrow = ns,ncol = ns)    # initialise matrix delta(i,j)
@@ -146,7 +143,7 @@ names(Mu) <- Species.names
 names(Rho) <- Species.names
 names(Sigma) <- Species.names
 names(Alpha) <- Species.names
-names(H0) <- Species.names
+names(H) <- Species.names
 names(K) <- Species.names
 colnames(G) <- Species.names
 rownames(G) <- Species.names
@@ -177,31 +174,49 @@ print(Alpha)
 print('G')
 print(G)
 print('H')
-print(H0)
+print(H)
 print('K')
 print(K)
 print('N')
 print(Nijk2)
 
 # Matrix formulation of the dynamics (Appendix B.3) -----------------------
-# Construct L, and M so that B=L.F+M (equation 14)
-# Construction of matrix L (equation 15)
+# Construct L1, L2, and M so that B=L.F+M (equation 14)
+# Construction of matrix L1 (equation 15)
 L0 <- matrix(data = 0,nrow = ny,ncol = ny)          # initialise the L0 matrix (exponents required to compute L)
 for (i in 1:(ny-1)){                                # loop on years
-  L0[(row(L0)-i)==col(L0)] <- i-1                   # assign exponent
+  L0[(row(L0)-i)==col(L0)] <- i                   # assign exponent
 }
 L <- matrix(data=0,nrow = dim(Nijk)[1]*ny,ncol = dim(Nijk)[2]*ny) # Need to check with Christian that this is not transposed
 for (j in 1:(ny-1)){                                # loop on columns (years)
   for (i in (j+1):ny){                              # loop on rows (years)
-    Lij <- ((IE-H)%^%L0[i,j])%*%Nijk                # construct the submatrix L(i,j)
+    Lij <- ((IE-IE*H)%^%L0[i,j])%*%Nijk                # construct the submatrix L(i,j)
     L[((i-1)*ns+1):(i*ns),((j-1)*(ns^2)+1):(j*(ns^2))] <- Lij
   }
 }
-# Construction of vector M (equation 16)
-M <- matrix(data=0,nrow = dim(Nijk)[1]*ny,ncol = 1)
+L=L[,rep(DietVector,ny)==1] # only retain the columns of L1 for the posible fluxes
+
+# Construction of vector M (equation 16 revised to include import)
+# M=M1+M2, with M1 the part related to B0 and M2 the part related to imports
+M1 <- matrix(data=0,nrow = dim(Nijk)[1]*ny,ncol = 1)
 for (i in 1:ny){                                    # loop on rows (years)
-  M[((i-1)*ns+1):(i*ns)] <- ((IE-H)%^%(i-1))%*%t(as.vector(B0))
+  M1[((i-1)*ns+1):(i*ns)] <- ((IE-IE*H)%^%(i-1))%*%t(as.vector(B0))
 }
+
+# Construction of Matrix M2 (added)
+L2 <- matrix(data=0,nrow = ns*ny,ncol = ns*ny) 
+for (j in 1:ny){                                # loop on columns (years)
+  for (i in 1:ny){                              # loop on rows (years)
+    Lij <- ((IE-IE*H)%^%L0[i,j])%*%(IE*K)                # construct the submatrix L(i,j)
+    L2[((i-1)*ns+1):(i*ns),((j-1)*ns+1):(j*ns)] <- Lij
+  }
+}
+M2 <- L2%*%as.vector(t(Import))
+
+M <- M1+M2
+
+# Linearisation of vector Import (added)
+Import=as.matrix(as.vector(t(Import)))
 
 # Matrix formulation of the constraints (Appendix B.4) --------------------
 # so that all constraints can be expressed in the form A.F<=B
@@ -218,19 +233,16 @@ b1 <- b1[rep(DietVector,ny)==1] # reduce B1 to possible fluxes only
 # !!! Note that this constraint is irrelevant as it is superceeded by the constraint #4
 A2 <- -L
 b2 <- M
-A2 <- A2[,rep(DietVector,ny)] # reduce A2 to possible fluxes only
-A2=NULL
-b2=NULL
+#A2=NULL
+#b2=NULL
 
 # constraint #3: biomasses are bounded above: L.F+M<=Bio.max (i.e. L.F<=Bio.max-M)
 A3 <- L
 b3 <- as.vector(t(as.matrix(Bio.max)))-as.vector(M)
-A3 <- A3[,rep(DietVector,ny)==1] # reduce A3 to possible fluxes only
 
 # constraint #4: biomasses are bounded below: L.F+M>=Bio.min (i.e. -L.F<=M-Bio.min)
 A4 <- -L
 b4 <- as.vector(M)-as.vector(t(as.matrix(Bio.min)))
-A4 <- A4[,rep(DietVector,ny)==1] # reduce A4 to possible fluxes only
 
 # constraint #5: variations in biomass are bounded above: 
 A5=NULL
@@ -253,8 +265,8 @@ A8 <- A8[(rep(DietVector,ny)==1),];A8 <- A8[,rep(DietVector,ny)==1]
 b8 <- b8[(rep(DietVector,ny)==1)] # reduce A8 and b8 to possible flows only
 
 # Combining all constraints together
-A <- rbind(A1,A2,A3,A4,A5,A6,A7,A8)
-b <- c(b1,b2,b3,b4,b5,b6,b7,b8)
+A <- rbind(A1,A2,A3,A5,A6,A7,A8)
+b <- c(b1,b2,b3,b5,b6,b7,b8)
 
 # reducing the dimensions of A and b to well defined constraints
 Alines <- apply(abs(A), 1,sum)>0                   # Sum up the matrix to keep the rows
@@ -263,12 +275,12 @@ bp <- as.matrix(b[which(Alines==T)])               # Select elements in the vect
 
 # sampling of the polytope ------------------------------------------------
 F0<-chebycenter(rbind(A7,A8),c(b7,b8))                   # Need for a starting point x0 : chebycenter method to define it
-F0<-chebycenter(rbind(A2,A7,A8),c(b2,b7,b8))                   # Need for a starting point x0 : chebycenter method to define it
+F0<-chebycenter(rbind(A1,A2,A7,A8),c(b1,b2,b7,b8))                   # Need for a starting point x0 : chebycenter method to define it
 
-F0<-chebycenter(rbind(A3,A7,A8),c(b3,b7,b8))                   # Need for a starting point x0 : chebycenter method to define it
+F0<-chebycenter(rbind(A1,A3,A7,A8),c(b1,b3,b7,b8))                   # Need for a starting point x0 : chebycenter method to define it
 
 F0<-chebycenter(Ap,bp)                   # Need for a starting point x0 : chebycenter method to define it
-#Fsample<-cpgs(100,Ap,bp,F0)              # Sample with Gibbs algorithm 100 vectors of flows
+Fsample<-cpgs2(10,Ap,bp,F0)              # Sample with Gibbs algorithm 100 vectors of flows
 
 
 # saving results ----------------------------------------------------------

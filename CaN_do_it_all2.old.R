@@ -36,13 +36,11 @@ Bio.max <- Biomasses[,seq(4,dim(Biomasses)[2],3)]
 # handling of primary production as a declining pool of ressource through time
 # (the idea is that the total production is given in the first year and will
 # decline throughout the years, following the min and max provided)
-delta.min <- Bio.min[,1]-Bio.mean[,1]
-delta.max <- Bio.max[,1]-Bio.mean[,1]
 Bio.mean[,1] <- flipud(as.matrix(cumsum(flipud(as.matrix(Bio.mean[,1])))))
-Bio.min[,1] <- Bio.mean[,1]+delta.min
-Bio.max[,1] <- Bio.mean[,1]+delta.max
+Bio.min[,1] <- flipud(as.matrix(cumsum(flipud(as.matrix(Bio.min[,1])))))
+Bio.max[,1] <- flipud(as.matrix(cumsum(flipud(as.matrix(Bio.max[,1])))))
 B0 <- Biomasses[1,seq(2,dim(Biomasses)[2],3)]
-B0[1] <- Bio.mean[1,1]+Biomasses[1,2] # the PP at t=0 is set to cumsum(PP) at t=1 + the PP at t=1
+B0[1] <- Bio.mean[1,1]
 
 Landings=read.delim(file = 'Landings.csv',header = TRUE, sep=';')
 if(dim(Biomasses)[1]!=dim(Landings)[1]){
@@ -60,10 +58,9 @@ Land.max <- Landings[,seq(4,dim(Biomasses)[2],3)]*1.1
 # through the years
 Species.names=c(Species.names,"Fishery")
 ns <- length(Species.names)
-Bio.min$Fishery.min <- cumsum(rowSums(Land.min))+sum(Land.min[1,])
-Bio.mean$Fishery <- cumsum(rowSums(Land.mean))+sum(Land.mean[1,])
-Bio.max$Fishery.max <- cumsum(rowSums(Land.max))+sum(Land.max[1,])
-B0$Fishery <- 0
+Bio.min$Fishery.min <- cumsum(rowSums(Land.min))
+Bio.max$Fishery.max <- cumsum(rowSums(Land.max))
+B0$Fishery <- sum(Land.mean[1,])
 Land.min$Fishery.min <- 0
 Land.max$Fishery.max <- 0
 
@@ -119,7 +116,7 @@ F.max[rep(c(rep(0,(ns*(ns-1))),rep(1,ns)),ny)==1] <- as.vector(t(as.matrix(Land.
 
 # deriving G, H and K -----------------------------------------------------
 # so that the Mater equation can be written in the form:
-# B(i,t+1) - B(i,t) = Sumj(G(j,i)F(j,i,t) - Sumj(K(i)F(i,j,t)) - H(i)B(i,t)
+# B(i,t+1) − B(i,t) = Sumj(G(j,i)F(j,i,t)−Sumj(K(i)F(i,j,t)) − H(i)B(i,t)
 H0 <- 1-exp(-Mu)
 K <- H0/Mu
 K[Mu==0]=1 # special case when Mu=0 (fishery)

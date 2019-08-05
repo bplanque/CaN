@@ -1,0 +1,12 @@
+B1=(I-H)*B0+N*F0+K*I0
+B2=(I-H)*B1+N*F1+K*I1
+B2=(I-H)^2*B0+(I-H)*N*F0+NF1+(I-H)*K*I0+K*I1
+B3=(I-H)^3*B0+(I-H)^2*N*F0+(I-H)*N*F1+N*F2+(I-H)^2*K*I0+(I-H)*K*I1+N*I2
+
+Bt=(I-H)^t*B0+sum(I-H)*(N*Fu)+sum(I-H)*(K*Ii)
+
+Vectors
+F
+B
+I
+B=L1(F)+L2(I)+M
